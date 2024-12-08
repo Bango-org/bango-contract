@@ -2,12 +2,12 @@
 
 pragma solidity 0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 import {ERC1155} from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
-import { CTHelpers } from "./CTHelper.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import { CTHelpers } from "./CTHelpers.sol";
 
 contract ConditionalTokens is ERC1155 {
-    using SafeMath for uint256;
+    using Math for uint256;
 
     constructor() ERC1155("https://game.example/api/item/{id}.json"){
     
@@ -94,7 +94,7 @@ contract ConditionalTokens is ERC1155 {
         uint den = 0;
         for (uint i = 0; i < outcomeSlotCount; i++) {
             uint num = payouts[i];
-            den = den.add(num);
+            den = den + num;
 
             require(payoutNumerators[conditionId][i] == 0, "payout numerator already set");
             payoutNumerators[conditionId][i] = num;
@@ -241,13 +241,13 @@ contract ConditionalTokens is ERC1155 {
             uint payoutNumerator = 0;
             for (uint j = 0; j < outcomeSlotCount; j++) {
                 if (indexSet & (1 << j) != 0) {
-                    payoutNumerator = payoutNumerator.add(payoutNumerators[conditionId][j]);
+                    payoutNumerator = payoutNumerator + payoutNumerators[conditionId][j];
                 }
             }
 
             uint payoutStake = balanceOf(msg.sender, positionId);
             if (payoutStake > 0) {
-                totalPayout = totalPayout.add(payoutStake.mul(payoutNumerator).div(den));
+                totalPayout += (payoutStake * payoutNumerator) / den;
                 _burn(msg.sender, positionId, payoutStake);
             }
         }

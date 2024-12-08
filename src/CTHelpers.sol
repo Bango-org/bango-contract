@@ -1,8 +1,8 @@
- // SPDX-License-Identifier: GPL-3.0
+// SPDX-License-Identifier: GPL-3.0
 
 pragma solidity 0.8.20;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 library CTHelpers {
     /// @dev Constructs a condition ID from an oracle, a question ID, and the outcome slot count for the question.
