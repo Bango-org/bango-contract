@@ -2,7 +2,8 @@
 
 pragma solidity 0.8.20;
 
-import 'openzeppelin-solidity/contracts/ownership/Ownable.sol'; 
+import "@openzeppelin/contracts/access/Ownable.sol";
+
 
 /// @title Whitelist for adding/removing users from a whitelist
 /// @author Anton Shtylman - @InfiniteStyles
