@@ -5,16 +5,28 @@ pragma solidity ^0.8.20;
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
-import { SignedSafeMath } from "@gnosis.pm/util-contracts/contracts/SignedSafeMath.sol";
-import { ERC1155TokenReceiver } from "@gnosis.pm/conditional-tokens-contracts/contracts/ERC1155/ERC1155TokenReceiver.sol";
-import { CTHelpers } from "@gnosis.pm/conditional-tokens-contracts/contracts/CTHelpers.sol";
-import { ConditionalTokens } from "@gnosis.pm/conditional-tokens-contracts/contracts/ConditionalTokens.sol";
+import { SignedSafeMath } from "../../lib/util-contracts/contracts/SignedSafeMath.sol";
+// import { ERC1155TokenReceiver } from "../ERC1155/ERC1155TokenReceiver.sol";
+import { Fixed192x64Math } from "../../lib/util-contracts/contracts/Fixed192x64Math.sol";
+
+import { CTHelpers } from "../CTHelpers.sol";
+import { ConditionalTokens } from "../ConditionalTokens.sol";
 import { Whitelist } from "./Whitelist.sol";
+import "@openzeppelin/contracts/token/ERC1155//IERC1155Receiver.sol";
 
 
-contract MarketMaker is Ownable, ERC1155TokenReceiver {
+contract MarketMaker is Ownable, IERC1155Receiver {
     using SignedSafeMath for int;
-    using SafeMath for uint;
+    using Math for uint;
+
+    
+    /*
+     *  Constants
+     */
+    uint constant ONE = 0x10000000000000000;
+    int constant EXP_LIMIT = 3394200909562557497344;
+
+
     /*
      *  Constants
      */    
@@ -65,13 +77,88 @@ contract MarketMaker is Ownable, ERC1155TokenReceiver {
 
     modifier onlyWhitelisted() {
         require(
-            whitelist == Whitelist(0) || whitelist.isWhitelisted(msg.sender),
+            whitelist == Whitelist(address(0)) || whitelist.isWhitelisted(msg.sender),
             "only whitelisted users may call this function"
         );
         _;
     }
 
-    function calcNetCost(int[] memory outcomeTokenAmounts) public view returns (int netCost);
+    constructor(
+        
+    ) Ownable(msg.sender) IERC1155Receiver() {
+        emit AMMCreated(0);
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
+        return interfaceId == type(IERC1155Receiver).interfaceId || 
+               interfaceId == type(IERC165).interfaceId;
+    }
+
+    function sumExpOffset(int log2N, int[] memory otExpNums, uint8 outcomeIndex, Fixed192x64Math.EstimationMode estimationMode)
+        private
+        view
+        returns (uint sum, int offset, uint outcomeExpTerm)
+    {
+        // Naive calculation of this causes an overflow
+        // since anything above a bit over 133*ONE supplied to exp will explode
+        // as exp(133) just about fits into 192 bits of whole number data.
+
+        // The choice of this offset is subject to another limit:
+        // computing the inner sum successfully.
+        // Since the index is 8 bits, there has to be 8 bits of headroom for
+        // each summand, meaning q/b - offset <= exponential_limit,
+        // where that limit can be found with `mp.floor(mp.log((2**248 - 1) / ONE) * ONE)`
+        // That is what EXP_LIMIT is set to: it is about 127.5
+
+        // finally, if the distribution looks like [BIG, tiny, tiny...], using a
+        // BIG offset will cause the tiny quantities to go really negative
+        // causing the associated exponentials to vanish.
+
+        require(log2N >= 0 && int(funding) >= 0);
+        offset = Fixed192x64Math.max(otExpNums);
+        offset = offset * (log2N) / int(funding);
+        offset = offset - (EXP_LIMIT);
+        uint term;
+        for (uint8 i = 0; i < otExpNums.length; i++) {
+            term = Fixed192x64Math.pow2((otExpNums[i] * log2N / int256(funding)) - offset, estimationMode);
+            if (i == outcomeIndex)
+                outcomeExpTerm = term;
+            sum = sum - term;
+        }
+    }
+
+    function calcNetCost(int[] memory outcomeTokenAmounts)
+        public
+        view
+        returns (int netCost)
+    {
+        require(outcomeTokenAmounts.length == atomicOutcomeSlotCount);
+
+        int[] memory otExpNums = new int[](atomicOutcomeSlotCount);
+        for (uint i = 0; i < atomicOutcomeSlotCount; i++) {
+            int balance = int(pmSystem.balanceOf(address(this), generateAtomicPositionId(i)));
+            require(balance >= 0);
+            otExpNums[i] = outcomeTokenAmounts[i] - balance;
+        }
+
+        int log2N = Fixed192x64Math.binaryLog(atomicOutcomeSlotCount * ONE, Fixed192x64Math.EstimationMode.UpperBound);
+
+        (uint sum, int offset, ) = sumExpOffset(log2N, otExpNums, 0, Fixed192x64Math.EstimationMode.UpperBound);
+        netCost = Fixed192x64Math.binaryLog(sum, Fixed192x64Math.EstimationMode.UpperBound);
+        netCost = netCost + offset;
+        netCost = ((netCost * int256(ONE)) / log2N) * int256(funding);
+
+
+        // Integer division for negative numbers already uses ceiling,
+        // so only check boundary condition for positive numbers
+        if(netCost <= 0 || netCost / int(ONE) * int(ONE) == netCost) {
+            netCost /= int(ONE);
+        } else {
+            netCost = netCost / int(ONE) + 1;
+        }
+
+        return netCost;
+    }
 
     /// @dev Allows to fund the market with collateral tokens converting them into outcome tokens
     /// Note for the future: should combine splitPosition and mergePositions into one function, as code duplication causes things like this to happen.
@@ -85,12 +172,12 @@ contract MarketMaker is Ownable, ERC1155TokenReceiver {
         if (fundingChange > 0) {
             require(collateralToken.transferFrom(msg.sender, address(this), uint(fundingChange)) && collateralToken.approve(address(pmSystem), uint(fundingChange)));
             splitPositionThroughAllConditions(uint(fundingChange));
-            funding = funding.add(uint(fundingChange));
+            funding = funding + uint(fundingChange);
             emit AMMFundingChanged(fundingChange);
         }
         if (fundingChange < 0) {
             mergePositionsThroughAllConditions(uint(-fundingChange));
-            funding = funding.sub(uint(-fundingChange));
+            funding = funding - uint(-fundingChange);
             require(collateralToken.transfer(owner(), uint(-fundingChange)));
             emit AMMFundingChanged(fundingChange);
         }
@@ -125,8 +212,6 @@ contract MarketMaker is Ownable, ERC1155TokenReceiver {
         emit AMMClosed();
     }
 
-    /// @dev Allows market owner to withdraw fees generated by trades
-    /// @return Fee amount
     function withdrawFees()
         public
         onlyOwner
@@ -138,29 +223,7 @@ contract MarketMaker is Ownable, ERC1155TokenReceiver {
         emit AMMFeeWithdrawal(fees);
     }
 
-    /// @dev Allows to trade outcome tokens and collateral with the market maker
-    /// @param outcomeTokenAmounts Amounts of each atomic outcome token to buy or sell. If positive, will buy this amount of outcome token from the market. If negative, will sell this amount back to the market instead. The indices of this array range from 0 to product(all conditions' outcomeSlotCounts)-1. For example, with two conditions with three outcome slots each and one condition with two outcome slots, you will have 3*3*2=18 total atomic outcome tokens, and the indices will range from 0 to 17. The indices map to atomic outcome slots depending on the order of the conditionIds. Let's say the first condition has slots A, B, C the second has slots X, Y, and the third has slots I, J, K. We can associate each atomic outcome token with indices by this map:
-    /// A&X&I == 0
-    /// B&X&I == 1
-    /// C&X&I == 2
-    /// A&Y&I == 3
-    /// B&Y&I == 4
-    /// C&Y&I == 5
-    /// A&X&J == 6
-    /// B&X&J == 7
-    /// C&X&J == 8
-    /// A&Y&J == 9
-    /// B&Y&J == 10
-    /// C&Y&J == 11
-    /// A&X&K == 12
-    /// B&X&K == 13
-    /// C&X&K == 14
-    /// A&Y&K == 15
-    /// B&Y&K == 16
-    /// C&Y&K == 17
-    /// This order is calculated via the generateAtomicPositionId function below: C&Y&I -> (2, 1, 0) -> 2 + 3 * (1 + 2 * (0 + 3 * (0 + 0)))
-    /// @param collateralLimit If positive, this is the limit for the amount of collateral tokens which will be sent to the market to conduct the trade. If negative, this is the minimum amount of collateral tokens which will be received from the market for the trade. If zero, there is no limit.
-    /// @return If positive, the amount of collateral sent to the market. If negative, the amount of collateral received from the market. If zero, no collateral was sent or received.
+
     function trade(int[] memory outcomeTokenAmounts, int collateralLimit)
         public
         atStage(Stage.Running)
@@ -240,14 +303,14 @@ contract MarketMaker is Ownable, ERC1155TokenReceiver {
         return outcomeTokenCost * fee / FEE_RANGE;
     }
 
-    function onERC1155Received(address operator, address /*from*/, uint256 /*id*/, uint256 /*value*/, bytes calldata /*data*/) external returns(bytes4) {
+    function onERC1155Received(address operator, address /*from*/, uint256 /*id*/, uint256 /*value*/, bytes calldata /*data*/) external view returns(bytes4) {
         if (operator == address(this)) {
             return this.onERC1155Received.selector;
         }
         return 0x0;
     }
 
-    function onERC1155BatchReceived(address _operator, address /*from*/, uint256[] calldata /*ids*/, uint256[] calldata /*values*/, bytes calldata /*data*/) external returns(bytes4) {
+    function onERC1155BatchReceived(address _operator, address /*from*/, uint256[] calldata /*ids*/, uint256[] calldata /*values*/, bytes calldata /*data*/) external view returns(bytes4) {
         if (_operator == address(this)) {
             return this.onERC1155BatchReceived.selector;
         }
