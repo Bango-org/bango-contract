@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 
-pragma solidity 0.8.20;
+pragma solidity ^0.8.20;
 
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { Fixed192x64Math } from "@gnosis.pm/util-contracts/contracts/Fixed192x64Math.sol";
@@ -9,7 +9,7 @@ import { MarketMaker } from "./MarketMaker.sol";
 /// @title LMSR market maker contract - Calculates share prices based on share distribution and initial funding
 /// @author Alan Lu - <alan.lu@gnosis.pm>
 contract LMSRMarketMaker is MarketMaker {
-    using SafeMath for uint;
+    using Math for uint;
 
     /*
      *  Constants
