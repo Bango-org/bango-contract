@@ -7,3 +7,6 @@
 [submodule "lib/conditional-tokens-contracts"]
 	path = lib/conditional-tokens-contracts
 	url = https://github.com/gnosis/conditional-tokens-contracts
+[submodule "lib/util-contracts"]
+	path = lib/util-contracts
+	url = https://github.com/gnosis/util-contracts
