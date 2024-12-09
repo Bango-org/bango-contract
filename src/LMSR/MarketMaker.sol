@@ -6,7 +6,6 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { SignedSafeMath } from "../../lib/util-contracts/contracts/SignedSafeMath.sol";
-// import { ERC1155TokenReceiver } from "../ERC1155/ERC1155TokenReceiver.sol";
 import { Fixed192x64Math } from "../../lib/util-contracts/contracts/Fixed192x64Math.sol";
 
 import { CTHelpers } from "../CTHelpers.sol";
