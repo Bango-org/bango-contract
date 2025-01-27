@@ -14,7 +14,7 @@ import { Whitelist } from "./Whitelist.sol";
 import "@openzeppelin/contracts/token/ERC1155//IERC1155Receiver.sol";
 
 
-contract MarketMaker is Ownable, IERC1155Receiver {
+contract LMSRMarketMaker is Ownable, IERC1155Receiver {
     using SignedSafeMath for int;
     using Math for uint;
 
@@ -158,6 +158,28 @@ contract MarketMaker is Ownable, IERC1155Receiver {
 
         return netCost;
     }
+
+
+    function calcMarginalPrice(uint8 outcomeTokenIndex)
+        public
+        view
+        returns (uint price)
+    {
+        int[] memory negOutcomeTokenBalances = new int[](atomicOutcomeSlotCount);
+        for (uint i = 0; i < atomicOutcomeSlotCount; i++) {
+            int negBalance = -int(pmSystem.balanceOf(address(this), generateAtomicPositionId(i)));
+            require(negBalance <= 0);
+            negOutcomeTokenBalances[i] = negBalance;
+        }
+
+        int log2N = Fixed192x64Math.binaryLog(negOutcomeTokenBalances.length * ONE, Fixed192x64Math.EstimationMode.Midpoint);
+        // The price function is exp(quantities[i]/b) / sum(exp(q/b) for q in quantities)
+        // To avoid overflow, calculate with
+        // exp(quantities[i]/b - offset) / sum(exp(q/b - offset) for q in quantities)
+        (uint sum, , uint outcomeExpTerm) = sumExpOffset(log2N, negOutcomeTokenBalances, outcomeTokenIndex, Fixed192x64Math.EstimationMode.Midpoint);
+        return outcomeExpTerm / (sum / ONE);
+    }
+
 
     /// @dev Allows to fund the market with collateral tokens converting them into outcome tokens
     /// Note for the future: should combine splitPosition and mergePositions into one function, as code duplication causes things like this to happen.
